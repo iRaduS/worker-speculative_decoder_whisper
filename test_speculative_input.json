@@ -1,0 +1,12 @@
+{
+  "input": {
+    "audio": "https://github.com/runpod-workers/sample-inputs/raw/main/audio/gettysburg.wav",
+    "model": "whisper-large-v3-speculative",
+    "inference_method": "speculative_decoding",
+    "transcription": "plain_text",
+    "translate": false,
+    "temperature": 0,
+    "language": "en",
+    "condition_on_previous_text": false
+  }
+}

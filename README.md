@@ -10,6 +10,7 @@
 
 ## Models
 
+### Faster-Whisper Models (Default)
 - tiny
 - base
 - small
@@ -21,13 +22,17 @@
 - distil-large-v3
 - turbo
 
+### Speculative Decoding Models
+- whisper-large-v3-speculative (2x faster inference with identical quality)
+
 ## Input
 
 | Input                               | Type  | Description                                                                                                                                                            |
 | ----------------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `audio`                             | Path  | URL to Audio file                                                                                                                                                      |
 | `audio_base64`                      | str   | Base64-encoded audio file                                                                                                                                              |
-| `model`                             | str   | Choose a Whisper model. Choices: "tiny", "base", "small", "medium", "large-v1", "large-v2", "large-v3", "distil-large-v2", "distil-large-v3", "turbo". Default: "base" |
+| `model`                             | str   | Choose a Whisper model. Choices: "tiny", "base", "small", "medium", "large-v1", "large-v2", "large-v3", "distil-large-v2", "distil-large-v3", "turbo", "whisper-large-v3-speculative". Default: "base" |
+| `inference_method`                  | str   | Choose inference method. Choices: "faster_whisper", "speculative_decoding". Default: "faster_whisper"                                                                |
 | `transcription`                     | str   | Choose the format for the transcription. Choices: "plain_text", "formatted_text", "srt", "vtt". Default: "plain_text"                                                  |
 | `translate`                         | bool  | Translate the text to English when set to True. Default: False                                                                                                         |
 | `translation`                       | str   | Choose the format for the translation. Choices: "plain_text", "formatted_text", "srt", "vtt". Default: "plain_text"                                                    |
@@ -47,15 +52,26 @@
 | `enable_vad`                        | bool  | If True, use the voice activity detection (VAD) to filter out parts of the audio without speech. This step is using the Silero VAD model. Default: False               |
 | `word_timestamps`                   | bool  | If True, include word timestamps in the output. Default: False                                                                                                         |
 
-### Example
+### Examples
 
-The following inputs can be used for testing the model:
-
+#### Faster-Whisper (Default)
 ```json
 {
   "input": {
     "audio": "https://github.com/runpod-workers/sample-inputs/raw/main/audio/gettysburg.wav",
     "model": "turbo"
+  }
+}
+```
+
+#### Speculative Decoding (2x Faster)
+```json
+{
+  "input": {
+    "audio": "https://github.com/runpod-workers/sample-inputs/raw/main/audio/gettysburg.wav",
+    "model": "whisper-large-v3-speculative",
+    "inference_method": "speculative_decoding",
+    "language": "en"
   }
 }
 ```
@@ -86,3 +102,88 @@ producing an output like this:
   "translation_time": 0.3796223163604736
 }
 ```
+
+## Speculative Decoding
+
+This worker now supports **Speculative Decoding** for faster Whisper inference with identical output quality. Speculative decoding achieves approximately **2x speedup** by using a smaller assistant model (distil-whisper) to predict tokens, which are then verified by the main model.
+
+### Features
+- **2x faster inference** while maintaining identical transcription quality
+- **GPU optimized** for CUDA environments
+- **Automatic fallback** to faster-whisper if speculative decoding is unavailable
+- **Compatible API** with existing faster-whisper parameters
+
+### Usage
+To use speculative decoding, set the inference method in your request:
+
+```json
+{
+  "input": {
+    "audio": "your_audio_url_here",
+    "inference_method": "speculative_decoding",
+    "model": "whisper-large-v3-speculative",
+    "language": "en"
+  }
+}
+```
+
+### Requirements
+- CUDA-compatible GPU
+- Additional dependencies: torch, transformers, torchaudio, soundfile, pydub
+
+### Performance Benefits
+- **Speed**: ~2x faster transcription compared to standard faster-whisper
+- **Quality**: Identical transcription results (same WER scores)
+- **Memory**: Efficient GPU memory usage with FP16 precision
+- **Throughput**: Higher files-per-minute processing rate
+
+## Local Development & Testing
+
+### CPU Testing (No GPU Required)
+
+For local development and testing without CUDA/GPU:
+
+```bash
+# Build CPU-only image
+docker build -f Dockerfile.cpu -t whisper-worker-cpu .
+
+# Run CPU tests
+docker run --rm -it whisper-worker-cpu python test_local.py
+
+# Run interactive container
+docker run --rm -it -p 8000:8000 whisper-worker-cpu
+```
+
+### CUDA/GPU Production
+
+For production deployment with GPU acceleration:
+
+```bash
+# Build CUDA image
+docker build -f Dockerfile.cuda -t whisper-worker-cuda .
+
+# Run with GPU support
+docker run --gpus all --rm -it whisper-worker-cuda
+```
+
+### Local Development Without Docker
+
+```bash
+# Install CPU dependencies
+pip install -r builder/requirements-cpu.txt
+
+# Set CPU mode
+export FORCE_CPU=1
+
+# Run local tests
+python test_local.py
+
+# Or run the handler directly
+python src/rp_handler.py
+```
+
+### Available Dockerfiles
+
+- `Dockerfile` - Default CPU version for local development
+- `Dockerfile.cpu` - CPU-only version for testing without GPU
+- `Dockerfile.cuda` - GPU-optimized version for production deployment

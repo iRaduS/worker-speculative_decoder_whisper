@@ -5,16 +5,34 @@ repository, with some modifications to make it work with the RP platform.
 """
 
 import gc
+import os
 import threading
 from concurrent.futures import (
     ThreadPoolExecutor,
 )  # Still needed for transcribe potentially?
 import numpy as np
+import time
+import warnings
 
 from runpod.serverless.utils import rp_cuda
 
 from faster_whisper import WhisperModel
 from faster_whisper.utils import format_timestamp
+
+# Speculative decoding imports
+try:
+    import torch
+    import transformers
+    from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, AutoModelForCausalLM
+    import torchaudio
+    import soundfile as sf
+    SPECULATIVE_AVAILABLE = True
+except ImportError as e:
+    SPECULATIVE_AVAILABLE = False
+    print(f"Warning: Speculative decoding dependencies not available: {e}")
+
+# Suppress warnings for cleaner output
+warnings.filterwarnings("ignore", category=UserWarning)
 
 # Define available models (for validation)
 AVAILABLE_MODELS = {
@@ -27,6 +45,16 @@ AVAILABLE_MODELS = {
     "large-v3",
     "turbo",
 }
+
+# Speculative decoding models
+SPECULATIVE_MODELS = {
+    "whisper-large-v3-speculative": {
+        "main_model": "openai/whisper-large-v3",
+        "assistant_model": "distil-whisper/distil-large-v3"
+    },
+}
+
+TARGET_SR = 16_000  # Whisper target sample rate (Hz)
 
 
 class Predictor:
@@ -195,6 +223,247 @@ class Predictor:
                         }
                     )
             results["word_timestamps"] = word_timestamps_list
+
+        return results
+
+
+class SpeculativePredictor:
+    """A Predictor class for Whisper with speculative decoding"""
+
+    def __init__(self):
+        """Initializes the predictor with no models loaded."""
+        self.main_model = None
+        self.assistant_model = None
+        self.processor = None
+        self.device = None
+        self.torch_dtype = None
+        self.current_model_name = None
+        self.model_lock = threading.Lock()
+
+    def setup(self):
+        """Initialize CUDA settings if available."""
+        if not SPECULATIVE_AVAILABLE:
+            raise RuntimeError("Speculative decoding dependencies not available. Please install required packages.")
+        
+        if torch.cuda.is_available() and not os.environ.get('FORCE_CPU'):
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            print("Speculative decoding will use CUDA")
+        else:
+            print("Speculative decoding will use CPU")
+
+    def _load_speculative_models(self, model_name):
+        """Load the main and assistant models for speculative decoding."""
+        if model_name not in SPECULATIVE_MODELS:
+            raise ValueError(f"Invalid speculative model: {model_name}. Available: {list(SPECULATIVE_MODELS.keys())}")
+
+        model_config = SPECULATIVE_MODELS[model_name]
+        main_model_id = model_config["main_model"]
+        assistant_model_id = model_config["assistant_model"]
+
+        # Determine device and dtype
+        force_cpu = os.environ.get('FORCE_CPU', False)
+        if torch.cuda.is_available() and not force_cpu:
+            self.device = "cuda:0"
+            self.torch_dtype = torch.float16
+        else:
+            self.device = "cpu"
+            self.torch_dtype = torch.float32
+            print("Warning: Running speculative decoding on CPU will be slower than CUDA.")
+
+        print(f"Loading main model: {main_model_id}")
+        start_time = time.time()
+        
+        # Load main model
+        self.main_model = AutoModelForSpeechSeq2Seq.from_pretrained(
+            main_model_id,
+            torch_dtype=self.torch_dtype,
+            low_cpu_mem_usage=True,
+            use_safetensors=True,
+            attn_implementation="sdpa",
+        )
+        self.main_model.to(self.device)
+
+        # Load processor
+        self.processor = AutoProcessor.from_pretrained(main_model_id)
+
+        # Load assistant model
+        print(f"Loading assistant model: {assistant_model_id}")
+        self.assistant_model = AutoModelForCausalLM.from_pretrained(
+            assistant_model_id,
+            torch_dtype=self.torch_dtype,
+            low_cpu_mem_usage=True,
+            use_safetensors=True,
+            attn_implementation="sdpa",
+        )
+        self.assistant_model.to(self.device)
+
+        load_time = time.time() - start_time
+        print(f"Models loaded in {load_time:.2f}s")
+        self.current_model_name = model_name
+
+    def _prepare_inputs(self, audio_path):
+        """Prepare audio inputs for the model."""
+        # Load and process audio
+        try:
+            waveform, sr = torchaudio.load(audio_path)
+            # Convert to mono if stereo
+            if waveform.shape[0] > 1:
+                waveform = waveform.mean(0, keepdim=True)
+            # Resample to 16kHz if needed
+            if sr != TARGET_SR:
+                resampler = torchaudio.transforms.Resample(sr, TARGET_SR)
+                waveform = resampler(waveform)
+            audio_array = waveform.squeeze().numpy()
+        except Exception:
+            # Fallback to soundfile
+            try:
+                audio_array, sr = sf.read(audio_path)
+                if sr != TARGET_SR:
+                    print(f"Warning: Audio sample rate {sr} != {TARGET_SR}. Results may be suboptimal.")
+            except Exception as e:
+                raise RuntimeError(f"Could not load audio file {audio_path}: {e}")
+
+        # Prepare inputs for the model
+        inputs = self.processor(
+            audio_array,
+            sampling_rate=TARGET_SR,
+            return_tensors="pt"
+        )
+        
+        # Move to device and convert dtype
+        inputs = inputs.to(device=self.device, dtype=self.torch_dtype)
+        
+        # Ensure attention mask is properly set
+        if "attention_mask" not in inputs:
+            inputs["attention_mask"] = torch.ones_like(inputs["input_features"])
+
+        return inputs
+
+    def _generate_with_speculative_decoding(self, inputs, language=None, task="transcribe", **kwargs):
+        """Generate with speculative decoding."""
+        if self.device.startswith("cuda"):
+            torch.cuda.synchronize()
+        start_time = time.time()
+        
+        generate_kwargs = {
+            "assistant_model": self.assistant_model,
+            "task": task,
+            "use_cache": True,
+            "do_sample": False,
+            "max_new_tokens": 128,
+            **kwargs
+        }
+        
+        if language:
+            generate_kwargs["language"] = language
+
+        outputs = self.main_model.generate(**inputs, **generate_kwargs)
+        
+        if self.device.startswith("cuda"):
+            torch.cuda.synchronize()
+        generation_time = time.time() - start_time
+        
+        return outputs, generation_time
+
+    def predict(
+        self,
+        audio,
+        model_name="whisper-large-v3-speculative",
+        transcription="plain_text",
+        translate=False,
+        translation="plain_text",
+        language=None,
+        temperature=0,
+        best_of=5,
+        beam_size=5,
+        patience=1,
+        length_penalty=None,
+        suppress_tokens="-1",
+        initial_prompt=None,
+        condition_on_previous_text=True,
+        temperature_increment_on_fallback=0.2,
+        compression_ratio_threshold=2.4,
+        logprob_threshold=-1.0,
+        no_speech_threshold=0.6,
+        enable_vad=False,
+        word_timestamps=False,
+    ):
+        """Run speculative decoding inference."""
+        with self.model_lock:
+            # Load models if not already loaded or if different model requested
+            if (self.main_model is None or 
+                self.assistant_model is None or 
+                self.processor is None or 
+                self.current_model_name != model_name):
+                
+                # Clear existing models
+                if self.main_model is not None:
+                    del self.main_model
+                    del self.assistant_model
+                    del self.processor
+                    gc.collect()
+                    if torch.cuda.is_available() and not os.environ.get('FORCE_CPU'):
+                        torch.cuda.empty_cache()
+                
+                self._load_speculative_models(model_name)
+
+        # Prepare inputs
+        inputs = self._prepare_inputs(audio)
+        
+        # Generate transcription
+        outputs, gen_time = self._generate_with_speculative_decoding(
+            inputs,
+            language=language,
+            task="transcribe",
+            temperature=0.0 if temperature == 0 else temperature,
+        )
+        
+        # Decode the output
+        prediction = self.processor.batch_decode(outputs, skip_special_tokens=True, normalize=True)[0]
+        
+        # Create a simple segment object for compatibility with format_segments
+        class SimpleSegment:
+            def __init__(self, text):
+                self.id = 0
+                self.seek = 0
+                self.start = 0.0
+                self.end = 0.0
+                self.text = text
+                self.tokens = []
+                self.temperature = temperature
+                self.avg_logprob = 0.0
+                self.compression_ratio = 0.0
+                self.no_speech_prob = 0.0
+        
+        segments = [SimpleSegment(prediction)]
+        
+        # Format transcription using the existing format_segments function
+        transcription_output = format_segments(transcription, segments)
+        
+        # Handle translation if requested
+        translation_output = None
+        if translate:
+            trans_outputs, _ = self._generate_with_speculative_decoding(
+                inputs,
+                language=language,
+                task="translate",
+                temperature=0.0 if temperature == 0 else temperature,
+            )
+            trans_prediction = self.processor.batch_decode(trans_outputs, skip_special_tokens=True, normalize=True)[0]
+            trans_segments = [SimpleSegment(trans_prediction)]
+            translation_output = format_segments(translation, trans_segments)
+
+        results = {
+            "segments": serialize_segments(segments),
+            "detected_language": language or "en",  # We don't have language detection in this implementation
+            "transcription": transcription_output,
+            "translation": translation_output,
+            "device": self.device,
+            "model": model_name,
+            "inference_time": gen_time,
+        }
 
         return results
 
