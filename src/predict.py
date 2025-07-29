@@ -124,10 +124,17 @@ class Predictor:
                 # Load the requested model
                 print(f"Loading model: {model_name}...")
                 try:
+                    # Check for network volume cache directory
+                    network_volume_path = os.environ.get("RUNPOD_VOLUME_PATH", "/runpod-volume")
+                    models_cache_dir = None
+                    if os.path.exists(network_volume_path):
+                        models_cache_dir = os.path.join(network_volume_path, "models")
+                    
                     loaded_model = WhisperModel(
                         model_name,
                         device="cuda" if rp_cuda.is_available() else "cpu",
                         compute_type="float16" if rp_cuda.is_available() else "int8",
+                        download_root=models_cache_dir
                     )
                     self.models[model_name] = loaded_model
                     model = loaded_model
@@ -275,6 +282,13 @@ class SpeculativePredictor:
         print(f"Loading main model: {main_model_id}")
         start_time = time.time()
         
+        # Check for network volume cache directory
+        network_volume_path = os.environ.get("RUNPOD_VOLUME_PATH", "/runpod-volume")
+        cache_dir = None
+        if os.path.exists(network_volume_path):
+            cache_dir = os.path.join(network_volume_path, "models")
+            print(f"Using network volume cache for speculative models: {cache_dir}")
+        
         # Load main model
         self.main_model = AutoModelForSpeechSeq2Seq.from_pretrained(
             main_model_id,
@@ -282,11 +296,12 @@ class SpeculativePredictor:
             low_cpu_mem_usage=True,
             use_safetensors=True,
             attn_implementation="sdpa",
+            cache_dir=cache_dir,
         )
         self.main_model.to(self.device)
 
         # Load processor
-        self.processor = AutoProcessor.from_pretrained(main_model_id)
+        self.processor = AutoProcessor.from_pretrained(main_model_id, cache_dir=cache_dir)
 
         # Load assistant model
         print(f"Loading assistant model: {assistant_model_id}")
@@ -296,6 +311,7 @@ class SpeculativePredictor:
             low_cpu_mem_usage=True,
             use_safetensors=True,
             attn_implementation="sdpa",
+            cache_dir=cache_dir,
         )
         self.assistant_model.to(self.device)
 
