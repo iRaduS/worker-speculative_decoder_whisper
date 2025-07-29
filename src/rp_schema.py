@@ -14,6 +14,11 @@ INPUT_VALIDATIONS = {
         'required': False,
         'default': 'base'
     },
+    'inference_method': {
+        'type': str,
+        'required': False,
+        'default': 'faster_whisper'
+    },
     'transcription': {
         'type': str,
         'required': False,
