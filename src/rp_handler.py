@@ -9,6 +9,29 @@ import base64
 import os
 import tempfile
 
+# Set cache directories BEFORE importing any ML libraries
+def setup_cache_directories():
+    """Setup cache directories for network volume support."""
+    network_volume_path = os.environ.get("RUNPOD_VOLUME_PATH", "/runpod-volume")
+    if os.path.exists(network_volume_path):
+        models_cache_dir = os.path.join(network_volume_path, "models")
+        os.makedirs(models_cache_dir, exist_ok=True)
+        
+        # Set environment variables for all caching libraries
+        os.environ["HF_HOME"] = models_cache_dir
+        os.environ["HF_HUB_CACHE"] = models_cache_dir
+        os.environ["TRANSFORMERS_CACHE"] = models_cache_dir
+        os.environ["TORCH_HOME"] = models_cache_dir
+        
+        print(f"Using network volume cache: {models_cache_dir}")
+        return models_cache_dir
+    else:
+        print("Network volume not available, using default cache.")
+        return None
+
+# Setup cache directories before any imports
+setup_cache_directories()
+
 from rp_schema import INPUT_VALIDATIONS
 from runpod.serverless.utils import download_files_from_urls, rp_cleanup, rp_debugger
 from runpod.serverless.utils.rp_validator import validate
