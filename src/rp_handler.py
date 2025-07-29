@@ -6,6 +6,7 @@ rp_debugger:
 The handler must be called with --rp_debugger flag to enable it.
 """
 import base64
+import os
 import tempfile
 
 from rp_schema import INPUT_VALIDATIONS
@@ -15,7 +16,34 @@ import runpod
 import predict
 
 
+# Initialize models on startup with network volume support
+def initialize_models():
+    """Initialize models with network volume caching."""
+    print("Initializing models with network volume support...")
+    
+    # Run model fetching script to ensure models are cached
+    try:
+        import subprocess
+        result = subprocess.run(["/usr/bin/python", "/fetch_models.py"], 
+                              capture_output=True, text=True, timeout=600)
+        if result.returncode != 0:
+            print(f"Model fetching failed: {result.stderr}")
+        else:
+            print(f"Model fetching completed: {result.stdout}")
+    except Exception as e:
+        print(f"Error running fetch_models.py: {e}")
+    
+    # Set cache directory environment variable for faster-whisper
+    network_volume_path = os.environ.get("RUNPOD_VOLUME_PATH", "/runpod-volume")
+    if os.path.exists(network_volume_path):
+        models_cache_dir = os.path.join(network_volume_path, "models")
+        os.environ["HF_HUB_CACHE"] = models_cache_dir
+        os.environ["TRANSFORMERS_CACHE"] = models_cache_dir
+        print(f"Using network volume cache: {models_cache_dir}")
+
 # Initialize both predictors
+initialize_models()
+
 FASTER_WHISPER_MODEL = predict.Predictor()
 FASTER_WHISPER_MODEL.setup()
 
