@@ -271,13 +271,25 @@ class SpeculativePredictor:
 
         # Determine device and dtype
         force_cpu = os.environ.get('FORCE_CPU', False)
-        if torch.cuda.is_available() and not force_cpu:
+        cuda_available = torch.cuda.is_available()
+        
+        print(f"🔍 GPU Detection:")
+        print(f"  - torch.cuda.is_available(): {cuda_available}")
+        print(f"  - FORCE_CPU environment: {force_cpu}")
+        
+        if cuda_available and not force_cpu:
             self.device = "cuda:0"
             self.torch_dtype = torch.float16
+            print(f"✅ Using GPU for speculative decoding: {self.device}")
         else:
             self.device = "cpu"
             self.torch_dtype = torch.float32
-            print("Warning: Running speculative decoding on CPU will be slower than CUDA.")
+            if force_cpu:
+                print("⚠️  FORCE_CPU=1 - Running speculative decoding on CPU (slower)")
+            elif not cuda_available:
+                print("⚠️  No GPU available - Running speculative decoding on CPU (slower)")
+            else:
+                print("⚠️  Running speculative decoding on CPU will be slower than CUDA.")
 
         print(f"Loading main model: {main_model_id}")
         start_time = time.time()
