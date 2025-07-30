@@ -13,6 +13,11 @@ import tempfile
 def setup_cache_directories():
     """Setup cache directories for network volume support."""
     network_volume_path = os.environ.get("RUNPOD_VOLUME_PATH", "/runpod-volume")
+    
+    print(f"DEBUG: RUNPOD_VOLUME_PATH env var: {os.environ.get('RUNPOD_VOLUME_PATH', 'NOT SET')}")
+    print(f"DEBUG: Checking network volume path: {network_volume_path}")
+    print(f"DEBUG: Network volume exists: {os.path.exists(network_volume_path)}")
+    
     if os.path.exists(network_volume_path):
         models_cache_dir = os.path.join(network_volume_path, "models")
         os.makedirs(models_cache_dir, exist_ok=True)
@@ -23,13 +28,18 @@ def setup_cache_directories():
         os.environ["TRANSFORMERS_CACHE"] = models_cache_dir
         os.environ["TORCH_HOME"] = models_cache_dir
         
-        print(f"Using network volume cache: {models_cache_dir}")
+        print(f"✅ Using network volume cache: {models_cache_dir}")
+        print(f"DEBUG: HF_HOME={os.environ.get('HF_HOME')}")
+        print(f"DEBUG: HF_HUB_CACHE={os.environ.get('HF_HUB_CACHE')}")
+        print(f"DEBUG: TRANSFORMERS_CACHE={os.environ.get('TRANSFORMERS_CACHE')}")
         return models_cache_dir
     else:
-        print("Network volume not available, using default cache.")
+        print("❌ Network volume not available, using default cache.")
+        print(f"DEBUG: Directory listing of parent: {os.listdir('/')}")
         return None
 
 # Setup cache directories before any imports
+print("🔄 Setting up cache directories...")
 setup_cache_directories()
 
 from rp_schema import INPUT_VALIDATIONS

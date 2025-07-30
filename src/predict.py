@@ -285,9 +285,17 @@ class SpeculativePredictor:
         # Check for network volume cache directory
         network_volume_path = os.environ.get("RUNPOD_VOLUME_PATH", "/runpod-volume")
         cache_dir = None
+        
+        print(f"DEBUG: SPECULATIVE - RUNPOD_VOLUME_PATH: {network_volume_path}")
+        print(f"DEBUG: SPECULATIVE - Path exists: {os.path.exists(network_volume_path)}")
+        print(f"DEBUG: SPECULATIVE - HF_HOME: {os.environ.get('HF_HOME', 'NOT SET')}")
+        print(f"DEBUG: SPECULATIVE - TRANSFORMERS_CACHE: {os.environ.get('TRANSFORMERS_CACHE', 'NOT SET')}")
+        
         if os.path.exists(network_volume_path):
             cache_dir = os.path.join(network_volume_path, "models")
-            print(f"Using network volume cache for speculative models: {cache_dir}")
+            print(f"✅ Using network volume cache for speculative models: {cache_dir}")
+        else:
+            print(f"❌ Network volume not found, using default cache")
         
         # Load main model
         self.main_model = AutoModelForSpeechSeq2Seq.from_pretrained(
