@@ -21,6 +21,7 @@ MODELS_CACHE_DIR = os.path.join(NETWORK_VOLUME_PATH, "models")
 # Set environment variables for transformers cache
 if os.path.exists(NETWORK_VOLUME_PATH):
     os.environ["HF_HOME"] = MODELS_CACHE_DIR
+    os.environ["HUGGINGFACE_HUB_CACHE"] = MODELS_CACHE_DIR
     os.environ["HF_HUB_CACHE"] = MODELS_CACHE_DIR
     os.environ["TRANSFORMERS_CACHE"] = MODELS_CACHE_DIR
     os.environ["TORCH_HOME"] = MODELS_CACHE_DIR

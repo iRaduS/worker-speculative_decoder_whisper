@@ -70,6 +70,8 @@ def initialize_models():
     network_volume_path = os.environ.get("RUNPOD_VOLUME_PATH", "/runpod-volume")
     if os.path.exists(network_volume_path):
         models_cache_dir = os.path.join(network_volume_path, "models")
+        os.environ["HF_HOME"] = models_cache_dir
+        os.environ["HUGGINGFACE_HUB_CACHE"] = models_cache_dir
         os.environ["HF_HUB_CACHE"] = models_cache_dir
         os.environ["TRANSFORMERS_CACHE"] = models_cache_dir
         print(f"Using network volume cache: {models_cache_dir}")
